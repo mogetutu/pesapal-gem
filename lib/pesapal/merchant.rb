@@ -140,17 +140,17 @@ module Pesapal
     # }
     # ```
     #
-    # @note You can change the environment at runtime using {#set_env}
+    # @note You can change the environment at runtime using {#change_env}
     #
     # @param env [Symbol] the environment we want to use i.e. `:development` or
     #   `:production`. Leaving it blank sets environment intelligently to
     #   `Rails.env` (if Rails) or `:development` (if non-Rails).
     def initialize(env = false)
-      set_env env
+      change_env env
       if defined?(Rails)
-        set_configuration Rails.application.config.pesapal_credentials
+        configure Rails.application.config.pesapal_credentials
       else
-        set_configuration
+        configure
       end
     end
 
@@ -159,7 +159,7 @@ module Pesapal
     # PesaPal will present the user with a page which contains the available
     # payment options and will redirect to your site to the _callback url_ once
     # the user has completed the payment process. A tracking id will be returned
-    # as a query parameter – this can be used subsequently to track the payment
+    # as a query parameter - this can be used subsequently to track the payment
     # status on Pesapal for the transaction later on.
     #
     # Generating the URL is a 3-step process:
@@ -190,7 +190,7 @@ module Pesapal
       @params = Pesapal::Helper::Post.set_parameters(@config[:callback_url], @config[:consumer_key], @post_xml)
 
       # generate oauth signature and add signature to the request parameters
-      @params[:oauth_signature] = Pesapal::Oauth::generate_oauth_signature("GET", @api_endpoints[:postpesapaldirectorderv4], @params, @config[:consumer_secret], @token_secret)
+      @params[:oauth_signature] = Pesapal::Oauth.generate_oauth_signature('GET', @api_endpoints[:postpesapaldirectorderv4], @params, @config[:consumer_secret], @token_secret)
 
       # change params (with signature) to a query string
       query_string = Pesapal::Oauth.generate_encoded_params_query_string @params
@@ -239,7 +239,7 @@ module Pesapal
       @params = Pesapal::Helper::Details.set_parameters(@config[:consumer_key], merchant_reference, transaction_tracking_id)
 
       # generate oauth signature and add signature to the request parameters
-      @params[:oauth_signature] = Pesapal::Oauth.generate_oauth_signature("GET", @api_endpoints[:querypaymentdetails], @params, @config[:consumer_secret], @token_secret)
+      @params[:oauth_signature] = Pesapal::Oauth.generate_oauth_signature('GET', @api_endpoints[:querypaymentdetails], @params, @config[:consumer_secret], @token_secret)
 
       # change params (with signature) to a query string
       query_string = Pesapal::Oauth.generate_encoded_params_query_string @params
@@ -255,10 +255,10 @@ module Pesapal
       response = CGI.parse response.body
       response = response['pesapal_response_data'][0].split(',')
 
-      { :method => response[1],
-        :status => response[2],
-        :merchant_reference => response[3],
-        :transaction_tracking_id => response[0]
+      { method: response[1],
+        status: response[2],
+        merchant_reference: response[3],
+        transaction_tracking_id: response[0]
       }
     end
 
@@ -294,7 +294,7 @@ module Pesapal
       @params = Pesapal::Helper::Status.set_parameters(@config[:consumer_key], merchant_reference, transaction_tracking_id)
 
       # generate oauth signature and add signature to the request parameters
-      @params[:oauth_signature] = Pesapal::Oauth.generate_oauth_signature("GET", @api_endpoints[:querypaymentstatus], @params, @config[:consumer_secret], @token_secret)
+      @params[:oauth_signature] = Pesapal::Oauth.generate_oauth_signature('GET', @api_endpoints[:querypaymentstatus], @params, @config[:consumer_secret], @token_secret)
 
       # change params (with signature) to a query string
       query_string = Pesapal::Oauth.generate_encoded_params_query_string @params
@@ -344,7 +344,7 @@ module Pesapal
     #
     # @return [Hash] contains Pesapal endpoints appropriate for the set
     #   environment
-    def set_env(env = false)
+    def change_env(env = false)
       env = env.to_s.downcase
       if env == 'production'
         @env = 'production'
@@ -352,7 +352,7 @@ module Pesapal
         @env = 'development'
         @env = Rails.env if defined?(Rails)
       end
-      set_endpoints
+      assign_endpoints
     end
 
     # Generates the appropriate IPN response depending on the status of the
@@ -381,8 +381,8 @@ module Pesapal
     # @note It's up to you to send the response back to Pesapal by providing the
     #   `:response` back to the IPN. The hard part is done.
     #
-    # @param notification_type [String] the IPN notification type, should be set
-    #   to CHANGE always
+    # @param notification_type [String] the IPN notification type, overridden
+    #   and set to CHANGE internally. Left here for extensibility.
     #
     # @param merchant_reference [String] the unique id generated for the
     #   transaction by your application before posting the order
@@ -393,12 +393,13 @@ module Pesapal
     # @return [Hash] contains the status and IPN response that should be sent
     #   back to Pesapal
     def ipn_listener(notification_type, merchant_reference, transaction_tracking_id)
+      notification_type = 'CHANGE'
       status = query_payment_status(merchant_reference, transaction_tracking_id)
-      output = { :status => status, :response => nil }
+      output = { status: status, response: nil }
 
       case status
-      when 'COMPLETED' then output[:response] = "pesapal_notification_type=CHANGE&pesapal_transaction_tracking_id=#{transaction_tracking_id}&pesapal_merchant_reference=#{merchant_reference}"
-      when 'FAILED'    then output[:response] = "pesapal_notification_type=CHANGE&pesapal_transaction_tracking_id=#{transaction_tracking_id}&pesapal_merchant_reference=#{merchant_reference}"
+      when 'COMPLETED' then output[:response] = "pesapal_notification_type=#{notification_type}&pesapal_transaction_tracking_id=#{transaction_tracking_id}&pesapal_merchant_reference=#{merchant_reference}"
+      when 'FAILED'    then output[:response] = "pesapal_notification_type=#{notification_type}&pesapal_transaction_tracking_id=#{transaction_tracking_id}&pesapal_merchant_reference=#{merchant_reference}"
       end
 
       output
@@ -406,8 +407,8 @@ module Pesapal
 
     private
 
-    # Set API endpoints depending on the environment.
-    def set_endpoints
+    # Assign API endpoints depending on the environment.
+    def assign_endpoints
       if @env == 'production'
         @api_domain = 'https://www.pesapal.com'
       else
@@ -422,13 +423,12 @@ module Pesapal
       @api_endpoints
     end
 
-    # Set credentials through hash that passed in (does a little processing to
-    # remove unwanted data & uses default if nothing is input).
-    def set_configuration(consumer_details = {})
-      # set the configuration
-      @config = { :callback_url => 'http://0.0.0.0:3000/pesapal/callback',
-                  :consumer_key => '<YOUR_CONSUMER_KEY>',
-                  :consumer_secret => '<YOUR_CONSUMER_SECRET>'
+    # Configure credentials through hash that passed in (does a little
+    # processing to remove unwanted data & uses default if nothing is input).
+    def configure(consumer_details = {})
+      @config = { callback_url: 'http://0.0.0.0:3000/pesapal/callback',
+                  consumer_key: '<YOUR_CONSUMER_KEY>',
+                  consumer_secret: '<YOUR_CONSUMER_SECRET>'
                 }
 
       valid_config_keys = @config.keys
